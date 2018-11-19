@@ -5,7 +5,7 @@
 
 typedef struct {
 	int index;
-	unsigned int weight;
+	int weight;
 } node_t;
 
 //reads the topology
@@ -16,3 +16,9 @@ int getSize(char *filename);
 void readData(char* filename, int rank, int chunkSize, char* text);
 //determine the frequency of each letter
 void determine_frequency(char* text, int* frequency, int *num_active, int num_alphabets);
+
+int add_node(int index, int weight, int* leaf_index, int *parent_index, node_t* nodes, int* num_nodes);
+
+void add_leaves(int* frequency, int num_alphabets, int* leaf_index, int *parent_index, node_t* nodes, int* num_nodes);
+
+void build_tree(int *free_index, int *parent_index, node_t* nodes, int* leaf_index, int* num_nodes);

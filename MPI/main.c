@@ -17,14 +17,19 @@ int main(int argc, char** argv)
 	MPI_Comm_size(MPI_COMM_WORLD, &nProcesses);
 
 	int* neigh = (int*)malloc(20 * sizeof(int));
-	char *text = NULL;
+	char *text;
 	int nr_elements = 0;
 	int chunkSize = 0;
 	int parent = 0;
 	int i;
 	int num_alphabets = 256;
 	int num_active = 0;
-	int* frequency = NULL; 
+	int* frequency;
+	node_t *nodes = NULL;
+	int num_nodes = 0;
+	int *leaf_index;
+	int *parent_index;
+	int free_index = 1;
 
 
 	//master rank
@@ -67,20 +72,43 @@ int main(int argc, char** argv)
 	//all ranks
 	text = (char*)malloc(chunkSize);
 	frequency = (int*)calloc(2 * num_alphabets, sizeof(int));
+	leaf_index = frequency + num_alphabets - 1;
+	nodes = (node_t *)calloc(2 * num_active, sizeof(node_t));
+  	parent_index = (int *)calloc(num_active, sizeof(int));
 
 	readData("text.in", rank, chunkSize, text);
 
 	determine_frequency(text, frequency, &num_active, num_alphabets);
 
-	if (rank == 0) {
-		printf("%s\n", text);
-		for (i = 0; i < num_alphabets; i++) {
-			if (frequency[i] > 0)
-				printf("[%c]:%d\n", i, frequency[i]);
-		}
+	// if (rank == 0) {
+		printf("%d\n", leaf_index);
+		add_leaves(frequency, num_alphabets, leaf_index, parent_index, nodes, &num_nodes);
+		printf("%d\n", num_nodes);
+		for (i = 0; i < num_active; i++)
+			printf("[i]:%d, [w]:%d\n", nodes[i].index, nodes[i].weight);
+	// }
 
-		printf("%d\n", num_active);
-	}
+	printf("AJUNGE AICI\n");
+
+	//build_tree(&free_index, parent_index, nodes, leaf_index, &num_nodes);
+
+	// if (rank == 0) {
+	// 	printf("%c\n", nodes[0].weight);
+	// }
+
+	// if (rank == 0) {
+	// 	printf("%s\n", text);
+	// 	for (i = 0; i < num_alphabets; i++) {
+	// 		if (frequency[i] > 0)
+	// 			printf("[%c]:%d\n", i, frequency[i]);
+	// 	}
+
+	// 	printf("%d\n", num_active);
+	// }
+
+
+
+
 
 	
 

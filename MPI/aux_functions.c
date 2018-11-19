@@ -90,3 +90,50 @@ void determine_frequency(char* text, int* frequency, int *num_active, int num_al
         }
     }
 }
+
+int add_node(int index, int weight, int* leaf_index, int *parent_index, node_t* nodes, int* num_nodes) {
+
+    int i = (*num_nodes);
+    (*num_nodes)++;
+
+    while (i > 0 && nodes[i].weight > weight) {
+        memcpy(&nodes[i + 1], &nodes[i], sizeof(node_t));
+        if (nodes[i].index < 0)
+            leaf_index[-nodes[i].index] += 1;
+        else
+            parent_index[nodes[i].index] += 1;
+        i--;
+    }
+
+    i++;
+    printf("i= %d\n", i);
+    nodes[i].index = index;
+    nodes[i].weight = weight;
+    if (index < 0)
+        leaf_index[-index] = i;
+    else
+        parent_index[index] = i;
+
+    return i;
+}
+
+void add_leaves(int* frequency, int num_alphabets, int* leaf_index, int *parent_index, node_t* nodes, int* num_nodes) {
+    int i, freq;
+    for (i = 0; i < num_alphabets; ++i) {
+        freq = frequency[i];
+        if (freq > 0) 
+            add_node(-(i + 1), freq, leaf_index, parent_index, nodes, num_nodes);
+            //printf("Freq > 0\n");
+    }
+}
+
+void build_tree(int *free_index, int *parent_index, node_t* nodes, int* leaf_index, int *num_nodes) {
+    int a, b, index;
+    while (free_index < num_nodes) {
+        a = (*free_index)++;
+        b = (*free_index)++;
+        index = add_node(b/2,
+            nodes[a].weight + nodes[b].weight, leaf_index, parent_index, nodes, num_nodes);
+        parent_index[b/2] = index;
+    }
+}
