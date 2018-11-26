@@ -1,10 +1,15 @@
 /* Copyright 2016 Gagarine Yaikhom (MIT License) */
+
+//retinere de codificare la fiecare litera
+//scriere in paralel cu threaduri
+//calculat cate caractere are fiecare parte de fisier
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <omp.h>
 
-#define MAX_BUFFER_SIZE 256
+#define MAX_BUFFER_SIZE 1024
 #define INVALID_BIT_READ -1
 #define INVALID_BIT_WRITE -1
 
@@ -57,19 +62,21 @@ void finalise();
 void init();
 
 void determine_frequency(FILE **f) {
-	int ID; 		/* Thread identification number*/
+	int ID; 		//numar thread
 	int **aux;
-	int c;
-	//printf("num %d\n",NUM_THREADS);
+	int c,j;
+
+	//setare numar threaduri
 	omp_set_num_threads( NUM_THREADS );
 
 	//gasire dimensiune initiala a fisierului in nr de caractere
 	fseek(f[0],0L,SEEK_END);
 	original_size = ftell(f[0]);
-	//printf("Size of file is %d\n",original_size);
+	//mutare cap de citire la inceputul fisierului
 	fseek(f[0],0L ,SEEK_SET);
+
+	//fisier de dimensiuni mici
 	if( original_size / NUM_THREADS < 10 ){
-		//printf("fisier prea mic pentru numarul de threaduri\n");
 		while ((c = fgetc(f[0])) != EOF) {
 			++frequency[c];
 		}
@@ -84,6 +91,7 @@ void determine_frequency(FILE **f) {
 	aux = (int**)malloc(NUM_THREADS*sizeof(int*));
 	for(c = 0; c < NUM_THREADS; c++)
 		aux[c] = (int *)calloc(2 * num_alphabets, sizeof(int));
+
 	#pragma omp parallel private(ID,c)
 	{
 	ID = omp_get_thread_num();
@@ -100,16 +108,21 @@ void determine_frequency(FILE **f) {
 	for(i = start; i < end; i++){
 		c = fgetc(f[ID]);
 		++aux[ID][c];
+		}
+	//}
+	{
+		#pragma omp barrier
 	}
-	}
-	for (int c = 0; c < num_alphabets; ++c) {
+	if(ID == 0)
+	for (c = 0; c < num_alphabets; ++c) {
 		char ch = c;
-		for(int j = 0; j < NUM_THREADS; j++)
+		for(j = 0; j < NUM_THREADS; j++)
 			frequency[c] += aux[j][c];
 		if( frequency[c] ){
 			//printf("total character %c este %d\n",ch,frequency[c]);
 			++num_active;
 		}
+	}
 	}
 	//printf("done\n");
 }
@@ -177,9 +190,10 @@ void build_tree() {
 
 
 int encode(const char* ifile, const char *ofile) {
+	int i,c;
 	FILE **fin, *fout;
 	fin = (FILE **)malloc(NUM_THREADS*sizeof(FILE *));
-	for(int i=0;i<NUM_THREADS;i++){
+	for(i=0;i<NUM_THREADS;i++){
 		if ((fin[i] = fopen(ifile, "rb")) == NULL) {
 			perror("Failed to open input file");
 			return FILE_OPEN_FAIL;
@@ -187,25 +201,28 @@ int encode(const char* ifile, const char *ofile) {
 	}
 	if ((fout = fopen(ofile, "wb")) == NULL) {
 		perror("Failed to open output file");
-		for(int i=0;i<NUM_THREADS;i++)
+		for(i=0;i<NUM_THREADS;i++)
 			fclose(fin[i]);
 		return FILE_OPEN_FAIL;
 	}
 
-	determine_frequency(fin);
+	determine_frequency(fin);	
 	stack = (int *) calloc(num_active - 1, sizeof(int));
 	allocate_tree();
 
 	add_leaves();
 	write_header(fout);
+	
 	build_tree();
 	fseek(fin[0], 0, SEEK_SET);
-	int c;
+
 	while ((c = fgetc(fin[0])) != EOF)
 		encode_alphabet(fout, c);
+
 	flush_buffer(fout);
 	free(stack);
-	for(int i=0;i<NUM_THREADS;i++)
+
+	for(i=0;i<NUM_THREADS;i++)
 		fclose(fin[i]);
 	fclose(fout);
 
@@ -216,10 +233,12 @@ void encode_alphabet(FILE *fout, int character) {
 	int node_index;
 	stack_top = 0;
 	node_index = leaf_index[character + 1];
+	
 	while (node_index < num_nodes) {
 		stack[stack_top++] = node_index % 2;
 		node_index = parent_index[(node_index + 1) / 2];
 	}
+
 	while (--stack_top > -1)
 		write_bit(fout, stack[stack_top]);
 }
