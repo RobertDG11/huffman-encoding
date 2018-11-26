@@ -1,6 +1,6 @@
 #!/bin/bash
 make build
-make build-omp
+make build-pthreads
 for i in 1 2 3 4 5 6
 do
 	echo -e "\n\n\ntest $i"

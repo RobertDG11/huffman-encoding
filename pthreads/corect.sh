@@ -1,6 +1,6 @@
 #!/bin/bash
 make build
-make build-omp
+make build-pthreads
 good=0
 for i in 1 2 3 4 5
 do
@@ -8,7 +8,7 @@ do
 	for j in 1 2 3 4
    	do
 		echo "test $j"
-		./paralel_Huf encode input$j out$j 4
+		./hufp encode input$j out$j 4
 		./huf decode out$j fin$j
 		DIFF=$(diff fin$j input$j)
 		if [ "$DIFF" != "" ]

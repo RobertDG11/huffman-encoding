@@ -1,3 +1,6 @@
 build:
-	gcc huffman_serial.c -o huf
+	gcc huffman.c -o huf
+
+build-pthreads:
+	gcc huffman_pthreads.c -o hufp -lpthread 
 
