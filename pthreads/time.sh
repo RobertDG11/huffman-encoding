@@ -8,7 +8,7 @@ do
 	for j in 1 2 4 8 16 24 32
    	do
 		echo "numar threaduri $j"
-		time ./paralel_Huf encode input$i out$i $j
+		time ./hufp encode input$i out$i $j
 	done
 done
 
