@@ -224,7 +224,7 @@ int encode(char* text, const char *ofile, int chunkSize) {
     allocate_tree();
 
     add_leaves();
-    write_header(fout);
+    //write_header(fout);
     build_tree();
 
     int c;
@@ -413,14 +413,6 @@ int read_header(FILE *f) {
 }
 
 
-
-void print_help() {
-      fprintf(stderr,
-          "USAGE: ./huffman [encode | decode] "
-          "<input out> <output file>\n");
-}
-
-
 int main(int argc, char** argv) {
 
 	int rank;
@@ -440,6 +432,9 @@ int main(int argc, char** argv) {
 	int chunkSize = 0;
 	int parent = 0;
 	int i, c;
+    int* local_frequency;
+    int loca_original_size;
+    int local_num_active;
 
 	if (rank == 0) {
 		int len;
@@ -481,12 +476,54 @@ int main(int argc, char** argv) {
 
 	readData("text.in", rank, chunkSize, text);
 
+    local_frequency = (int *)
+        calloc(2 * num_alphabets, sizeof(int));
+
 	sprintf(ofile, "output%d.dat", rank);
 
 	init();
 
 	encode(text, ofile, chunkSize);
 
+    chunkSize = getSize(ofile);
+
+    if (rank == 0) {
+        for (i = 0; i < nr_elements; i++) {
+            MPI_Recv(local_frequency, num_alphabets, MPI_INT, neigh[i], 0, MPI_COMM_WORLD, &status);
+            
+            for(i = 0; i < num_alphabets; i++) {
+                frequency[i]+=local_frequency[i];
+            }   
+        }
+
+        for (i = 0; i < num_alphabets; i++) {
+            if (frequency[i] > 0)
+                printf("[%c]%d\n",i,frequency[i]);
+        }
+        
+    }
+
+    else {
+        //leaf
+        if (nr_elements == 1) {
+            MPI_Send(frequency, num_alphabets, MPI_INT, parent, 0, MPI_COMM_WORLD);
+        }
+        else {
+            //first we recive
+            for (i = 0; i < nr_elements; i++) {
+                if (neigh[i] != parent) {
+                    MPI_Recv(local_frequency, num_alphabets, MPI_INT, neigh[i], 0, MPI_COMM_WORLD, &status); 
+
+                    for(i = 0; i < num_alphabets; i++) {
+                        frequency[i]+=local_frequency[i];
+                    } 
+                }
+                else {
+                    MPI_Send(frequency, num_alphabets, MPI_INT, parent, 0, MPI_COMM_WORLD);
+                }
+            }
+        }
+    }
 
 	MPI_Finalize();
 }
