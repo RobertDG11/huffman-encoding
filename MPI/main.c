@@ -21,15 +21,23 @@ int main(int argc, char** argv)
 	int nr_elements = 0;
 	int chunkSize = 0;
 	int parent = 0;
-	int i;
+	int i, c;
 	int num_alphabets = 256;
 	int num_active = 0;
 	int* frequency;
-	node_t *nodes = NULL;
+	node_t *nodes;
 	int num_nodes = 0;
 	int *leaf_index;
 	int *parent_index;
 	int free_index = 1;
+	unsigned int original_size = 0;
+
+	int *stack;
+	int stack_top;
+
+	unsigned char buffer[MAX_BUFFER_SIZE];
+	int bits_in_buffer = 0;
+	int current_bit = 0;
 
 
 	//master rank
@@ -38,8 +46,6 @@ int main(int argc, char** argv)
 		readTopology("topology.in", neigh, 0, &nr_elements);
 
 		len = getSize("text.in");
-
-		//printf("[%d]The len of the file is %d\n", rank,len);
 
 		chunkSize = len / nProcesses;
 
@@ -68,7 +74,7 @@ int main(int argc, char** argv)
 		}
 		
 	}
-
+	
 	//all ranks
 	text = (char*)malloc(chunkSize);
 	frequency = (int*)calloc(2 * num_alphabets, sizeof(int));
@@ -78,40 +84,64 @@ int main(int argc, char** argv)
 
 	readData("text.in", rank, chunkSize, text);
 
-	determine_frequency(text, frequency, &num_active, num_alphabets);
+	if (rank == 0)
+		printf("%s\n", text);
 
-	// if (rank == 0) {
-		printf("%d\n", leaf_index);
-		add_leaves(frequency, num_alphabets, leaf_index, parent_index, nodes, &num_nodes);
-		printf("%d\n", num_nodes);
-		for (i = 0; i < num_active; i++)
-			printf("[i]:%d, [w]:%d\n", nodes[i].index, nodes[i].weight);
-	// }
+	FILE *fout;
+	char* ofile = malloc(30 * sizeof(char));
 
-	printf("AJUNGE AICI\n");
+	sprintf(ofile, "output%d.dat", rank);
 
-	//build_tree(&free_index, parent_index, nodes, leaf_index, &num_nodes);
+	fout == fopen(ofile, "wb");
 
-	// if (rank == 0) {
-	// 	printf("%c\n", nodes[0].weight);
-	// }
+	determine_frequency(text, frequency, &num_active, num_alphabets, &original_size);
 
-	// if (rank == 0) {
-	// 	printf("%s\n", text);
-	// 	for (i = 0; i < num_alphabets; i++) {
-	// 		if (frequency[i] > 0)
-	// 			printf("[%c]:%d\n", i, frequency[i]);
-	// 	}
+	stack = (int *)calloc(num_active - 1, sizeof(int));
 
-	// 	printf("%d\n", num_active);
-	// }
+	for (i = 0; i < num_alphabets; i++) {
+		if (frequency[i] > 0) {
+			add_node(-(i + 1), frequency[i], leaf_index, parent_index, nodes, &num_nodes);
+		}
+	}
 
+	write_header(fout, nodes, num_active, original_size);
 
+	build_tree(&free_index, parent_index, nodes, leaf_index, num_nodes);
+	if(rank == 0)
+		printf("%d\n", free_index);
 
+	for (c = 0; c < chunkSize; c++) {
+		int node_index;
+		int character = (int)text[c];
+		stack_top = 0;
+		node_index = leaf_index[character + 1];
 
+		while (node_index < num_nodes) {
+		    stack[stack_top++] = node_index % 2;
+		    node_index = parent_index[(node_index + 1) / 2];
+		}
 
-	
+		while (--stack_top> -1) {
+		    if (bits_in_buffer == MAX_BUFFER_SIZE << 3) {
+		    	printf("LALALA\n");
+		        size_t bytes_written = fwrite(buffer, 1, MAX_BUFFER_SIZE, fout);
+		        
+		        bits_in_buffer = 0;
+		        memset(buffer, 0, MAX_BUFFER_SIZE);
+		    }
 
+		    if (stack[stack_top])
+		        buffer[bits_in_buffer >> 3] |=
+		            (0x1 << (7 - bits_in_buffer % 8));
+		    bits_in_buffer++;
+		}
+
+	}
+
+	//flush_buffer(fout, &bits_in_buffer, buffer);
+
+	// free(stack);
+	// fclose(fout);
 
 	MPI_Finalize();
 
