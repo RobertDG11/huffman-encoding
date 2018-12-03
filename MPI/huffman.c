@@ -417,7 +417,6 @@ int main(int argc, char** argv) {
 
 	int rank;
 	int nProcesses;
-	int l;
 
 	MPI_Init(&argc, &argv);
 	MPI_Status status;
@@ -431,7 +430,7 @@ int main(int argc, char** argv) {
 	int nr_elements = 0;
 	int chunkSize = 0;
 	int parent = 0;
-	int i, c;
+	int i, j;
     int* local_frequency;
     int loca_original_size;
     int local_num_active;
@@ -490,10 +489,11 @@ int main(int argc, char** argv) {
     if (rank == 0) {
         for (i = 0; i < nr_elements; i++) {
             MPI_Recv(local_frequency, num_alphabets, MPI_INT, neigh[i], 0, MPI_COMM_WORLD, &status);
-            
-            for(i = 0; i < num_alphabets; i++) {
-                frequency[i]+=local_frequency[i];
+            //printf("[RANK %d]Received from %d\n", rank, neigh[i]);
+            for(j = 0; j < num_alphabets; j++) {
+                frequency[j]+=local_frequency[j];
             }   
+            
         }
 
         for (i = 0; i < num_alphabets; i++) {
@@ -507,21 +507,21 @@ int main(int argc, char** argv) {
         //leaf
         if (nr_elements == 1) {
             MPI_Send(frequency, num_alphabets, MPI_INT, parent, 0, MPI_COMM_WORLD);
+            //printf("[RANK %d]Sent to %d\n", rank, parent);
         }
         else {
-            //first we recive
+            //first we receive
             for (i = 0; i < nr_elements; i++) {
                 if (neigh[i] != parent) {
                     MPI_Recv(local_frequency, num_alphabets, MPI_INT, neigh[i], 0, MPI_COMM_WORLD, &status); 
-
-                    for(i = 0; i < num_alphabets; i++) {
-                        frequency[i]+=local_frequency[i];
+        //            printf("[RANK %d]Received from %d\n", rank, neigh[i]);
+                    for(j = 0; j < num_alphabets; j++) {
+                       frequency[j]+=local_frequency[j];
                     } 
                 }
-                else {
-                    MPI_Send(frequency, num_alphabets, MPI_INT, parent, 0, MPI_COMM_WORLD);
-                }
             }
+            MPI_Send(frequency, num_alphabets, MPI_INT, parent, 0, MPI_COMM_WORLD);
+            //printf("[RANK %d]Sent to %d\n", rank, parent);
         }
     }
 
