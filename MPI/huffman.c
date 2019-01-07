@@ -16,7 +16,9 @@
 int num_alphabets = 256;
 int num_active = 0;
 int *frequency = NULL;
+int *frequency_copy = NULL;
 unsigned int original_size = 0;
+int start_write = 0;
 
 typedef struct {
     int index;
@@ -30,16 +32,22 @@ int *parent_index = NULL;
 
 int free_index = 1;
 
-int *stack;
-int stack_top;
+int **stack;
+int *stack_top;
+int size_text;
+int *size_text_all;
 
 unsigned char buffer[MAX_BUFFER_SIZE];
+unsigned char buffer_dummy[MAX_BUFFER_SIZE];
 int bits_in_buffer = 0;
 int current_bit = 0;
 
 int eof_input = 0;
 
-void determine_frequency(char* text);
+char* in;
+char* out;
+
+void determine_frequency(char *infile, int rank, int nProcesses);
 int read_header(FILE *f);
 int write_header(FILE *f);
 int read_bit(FILE *f);
@@ -48,51 +56,18 @@ int flush_buffer(FILE *f);
 void decode_bit_stream(FILE *fin, FILE *fout);
 int decode(const char* ifile, const char *ofile);
 void encode_alphabet(FILE *fout, int character);
-int encode(char* text, const char *ofile, int chunkSize);
+void encode_character();
+int encode(FILE* fout, int rank, const char *infile, int nProcesses);
 void build_tree();
 void add_leaves();
 int add_node(int index, int weight);
 void finalise();
 void init();
 void readTopology(char* filename, int* neigh, int rank, int* nr_elements);
-void readData(char* filename, int rank, int chunkSize, char* text);
+void readData(char* filename, int rank, int chunkSize, int offset, char* text);
 int getSize(char *filename);
-void readData(char* filename, int rank, int chunkSize, char* text);
 
-void readTopology(char* filename, int* neigh, int rank, int* nr_elements) 
-{
-    FILE* fin;
-    char line[200];
-
-    fin = fopen(filename, "r");
-    if (fin == NULL) {
-        perror("Nu exista fisierul\n");
-        exit(1);
-    }
-
-    while (fgets(line, 200, fin) != NULL) {
-        int count = 0;
-        if (line[strlen(line) - 1] == '\n') {
-            line[strlen(line) - 1] = ' ';
-        }
-        //every rank reads only his neighbours
-        if (atoi(&line[0]) == rank) {
-            char *tok = strtok(line, " ");
-            while(tok != NULL) {
-                if(count > 0) {
-                    neigh[count - 1] = atoi(tok);
-                    (*nr_elements)++;
-                }
-                count++;
-                tok = strtok(NULL, " ");
-            }  
-        }
-    }
-
-    fclose(fin);
-}
-
-void readData(char* filename, int rank, int chunkSize, char* text)
+void readData(char* filename, int rank, int chunkSize, int offset, char* text)
 {
     FILE* fin;
     int i;
@@ -103,7 +78,7 @@ void readData(char* filename, int rank, int chunkSize, char* text)
         exit(1);
     }
 
-    fseek(fin, rank * chunkSize, SEEK_SET);
+    fseek(fin, offset, SEEK_SET);
 
     fread(text, chunkSize, 1, fin);
 
@@ -134,24 +109,49 @@ int getSize(char *filename)
     
 }
 
-void determine_frequency(char* text) 
+void determine_frequency(char *infile, int rank, int nProcesses) 
 {
-    int i;
+    int i, c;
+    int len = getSize(infile);
+    int steps = (len / nProcesses) + 1;
+    int start = rank * steps;
+    int end = (rank + 1) * steps;
 
-    for (i = 0; i < strlen(text); i++) {
-        frequency[text[i]]++;
-        original_size++;
+
+    FILE *fin;
+
+    fin = fopen(infile, "r");
+    if (fin == NULL) {
+        perror("Nu exista fisierul\n");
+        return FILE_OPEN_FAIL;
     }
 
-    for (i = 0; i < num_alphabets; i++) {
-        if (frequency[i] > 0) {
-            num_active++;
+    if (len <= 100) {
+        if (rank == 0) {
+            while ((c = fgetc(fin)) != EOF) {
+                frequency[c]++;
+                frequency_copy[c]++;
+
+            }
+        }
+    } else {
+        if (end > len)
+            end = len; 
+        fseek(fin, start, SEEK_CUR);
+        for(i = start; i < end; i++){
+            c = fgetc(fin);
+            frequency[c]++;
+            frequency_copy[c]++;
         }
     }
+
+    fclose(fin);
 }
 
 void init() {
     frequency = (int *)
+        calloc(2 * num_alphabets, sizeof(int));
+    frequency_copy = (int *)
         calloc(2 * num_alphabets, sizeof(int));
     leaf_index = frequency + num_alphabets - 1;
 }
@@ -212,82 +212,114 @@ void build_tree() {
 }
 
 
-int encode(char* text, const char *ofile, int chunkSize) {
-    FILE *fout;
-    if ((fout = fopen(ofile, "wb")) == NULL) {
+int encode(FILE *fout, int rank, const char *infile, int nProcesses) {
+
+    int start_write = 0;
+    int steps = (original_size / nProcesses) + 1;
+    int start = rank * steps;
+    int end = (rank + 1) * steps;
+    int bit_number, k, i, c;
+    int size;
+    int leaf_len = 0;
+    int parent_len = 0;
+
+    MPI_Status status;
+
+    FILE* fin;
+    fin = fopen(infile, "r");
+    if (fin == NULL) {
         perror("Failed to open output file");
         return FILE_OPEN_FAIL;
     }
 
-    determine_frequency(text);
-    stack = (int *) calloc(num_active - 1, sizeof(int));
-    allocate_tree();
+    size = start_write * 8;
 
-    add_leaves();
-    //write_header(fout);
-    build_tree();
-
-    int c;
-    for (c = 0; c < chunkSize; c++) {
-    	encode_alphabet(fout, (int)text[c]);
+    for (i = 0; i < rank; i++) {
+        size += size_text_all[i];
     }
 
-    flush_buffer(fout);
-    free(stack);
-    fclose(fout);
 
+    if (rank != 0) {
+        fseek(fout, size / 8, SEEK_SET);
+            for( i = 0; i < size % 8; i++) {
+                ++bits_in_buffer;
+            }
+    }
+
+
+    fseek(fin, start, SEEK_SET);
+
+    for(i = start; i < end; i++) {
+        c = fgetc(fin);
+        bit_number = stack_top[c];
+    
+        while (--bit_number > -1) {
+            if (bits_in_buffer == MAX_BUFFER_SIZE << 3) {
+
+                size_t bytes_written = fwrite(buffer, 1, MAX_BUFFER_SIZE, fout);
+
+                bits_in_buffer = 0;
+
+                memset(buffer, 0, MAX_BUFFER_SIZE);
+                
+            }
+            if (stack[c][bit_number])
+                buffer[bits_in_buffer >> 3] |= (0x1 << (7 - bits_in_buffer % 8));
+            ++bits_in_buffer;      
+        }
+    }
+
+    if (rank == 0) {
+        while ((c = fgetc(fin)) != EOF)
+        encode_alphabet(fout, c);
+
+        flush_buffer(fout);    
+    }
+    
+    free(stack_top);
+
+    for(i = 0; i < num_alphabets; i++)
+        free(stack[i]);
+
+    free(stack);
+
+    fclose(fin);
+    fclose(fout);
+    
     return 0;
 }
 
 void encode_alphabet(FILE *fout, int character) {
-    int node_index;
-    stack_top = 0;
-    node_index = leaf_index[character + 1];
-    while (node_index < num_nodes) {
-        stack[stack_top++] = node_index % 2;
-        node_index = parent_index[(node_index + 1) / 2];
-    }
-    while (--stack_top > -1)
-        write_bit(fout, stack[stack_top]);
+    int aux;
+    aux = stack_top[character];
+    while (--aux > -1)
+        write_bit(fout, stack[character][aux]);
 }
 
-int decode(const char* ifile, const char *ofile) {
-    FILE *fin, *fout;
-    if ((fin = fopen(ifile, "rb")) == NULL) {
-        perror("Failed to open input file");
-        return FILE_OPEN_FAIL;
-    }
-    if ((fout = fopen(ofile, "wb")) == NULL) {
-        perror("Failed to open output file");
-        fclose(fin);
-        return FILE_OPEN_FAIL;
-    }
+void encode_character() {
+    int node_index, i;
 
-    if (read_header(fin) == 0) {
-        build_tree();
-        decode_bit_stream(fin, fout);
-    }
-    fclose(fin);
-    fclose(fout);
+    size_text = 0;
+    stack_top = (int*)calloc(num_alphabets,sizeof(int));
+    stack = (int**)calloc(num_alphabets,sizeof(int*));
 
-    return 0;
-}
+    for(i = 0; i < num_alphabets; ++i)
+        stack[i] = (int *) calloc(num_active - 1, sizeof(int));
 
-void decode_bit_stream(FILE *fin, FILE *fout) {
-    int i = 0, bit, node_index = nodes[num_nodes].index;
-    while (1) {
-        bit = read_bit(fin);
-        if (bit == -1)
-            break;
-        node_index = nodes[node_index * 2 - bit].index;
-        if (node_index < 0) {
-            char c = -node_index - 1;
-            fwrite(&c, 1, 1, fout);
-            if (++i == original_size)
-                break;
-            node_index = nodes[num_nodes].index;
+    for(i = 0; i < num_alphabets; ++i) {
+        char ch = i;
+        if( frequency[i] != 0 ) {
+            stack_top[i] = 0;
+            node_index = leaf_index[i + 1];
+            while (node_index < num_nodes) {
+                stack[i][stack_top[i]++] = node_index % 2;
+                node_index = parent_index[(node_index + 1) / 2];
+            }
         }
     }
+    for(i = 0; i < num_alphabets; i++)
+        size_text += frequency_copy[i]*stack_top[i];
+
 }
 
 int write_bit(FILE *f, int bit) {
@@ -318,30 +350,6 @@ int flush_buffer(FILE *f) {
     return 0;
 }
 
-int read_bit(FILE *f) {
-    if (current_bit == bits_in_buffer) {
-        if (eof_input)
-            return END_OF_FILE;
-        else {
-            size_t bytes_read =
-                fread(buffer, 1, MAX_BUFFER_SIZE, f);
-            if (bytes_read < MAX_BUFFER_SIZE) {
-                if (feof(f))
-                    eof_input = 1;
-            }
-            bits_in_buffer = bytes_read << 3;
-            current_bit = 0;
-        }
-    }
-
-    if (bits_in_buffer == 0)
-        return END_OF_FILE;
-    int bit = (buffer[current_bit >> 3] >>
-        (7 - current_bit % 8)) & 0x1;
-    ++current_bit;
-    return bit;
-}
-
 int write_header(FILE *f) {
      int i, j, byte = 0,
          size = sizeof(unsigned int) + 1 +
@@ -370,48 +378,11 @@ int write_header(FILE *f) {
      return 0;
 }
 
-int read_header(FILE *f) {
-     int i, j, byte = 0, size;
-     size_t bytes_read;
-     unsigned char buff[4];
-
-     bytes_read = fread(&buff, 1, sizeof(int), f);
-     if (bytes_read < 1)
-         return END_OF_FILE;
-     byte = 0;
-     original_size = buff[byte++];
-     while (byte < sizeof(int))
-         original_size =
-             (original_size << (1 << 3)) | buff[byte++];
-
-     bytes_read = fread(&num_active, 1, 1, f);
-     if (bytes_read < 1)
-         return END_OF_FILE;
-
-     allocate_tree();
-
-     size = num_active * (1 + sizeof(int));
-     unsigned int weight;
-     char *buffer = (char *) calloc(size, 1);
-     if (buffer == NULL)
-         return MEM_ALLOC_FAIL;
-     fread(buffer, 1, size, f);
-     byte = 0;
-     for (i = 1; i <= num_active; ++i) {
-         nodes[i].index = -(buffer[byte++] + 1);
-         j = 0;
-         weight = (unsigned char) buffer[byte++];
-         while (++j < sizeof(int)) {
-             weight = (weight << (1 << 3)) |
-                 (unsigned char) buffer[byte++];
-         }
-         nodes[i].weight = weight;
-     }
-     num_nodes = (int) num_active;
-     free(buffer);
-     return 0;
+void print_help() {
+      fprintf(stderr,
+          "USAGE: mpirun -np X ./huffman "
+          "<input file> <output file>, where X is the number of processes\n");
 }
-
 
 int main(int argc, char** argv) {
 
@@ -424,28 +395,33 @@ int main(int argc, char** argv) {
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 	MPI_Comm_size(MPI_COMM_WORLD, &nProcesses);
 
-
-	int* neigh = (int*)malloc(20 * sizeof(int));
-	char *text;
-	int nr_elements = 0;
 	int chunkSize = 0;
+	int i, j, c;
 	int parent = 0;
-	int i, j;
     int* local_frequency;
-    int loca_original_size;
-    int local_num_active;
+    int len;
+    int offset = 0;
+    int size = 0;
+
+
+    if (argc != 3) {
+        print_help();
+        return FAILURE;
+    }
+
+    in = strdup(argv[1]);
+    out = strdup(argv[2]);
+
 
 	if (rank == 0) {
-		int len;
-		readTopology("topology.in", neigh, 0, &nr_elements);
-
-		len = getSize("text.in");
+		len = getSize(in);
+        original_size = len;
 
 		chunkSize = len / nProcesses;
 
-		for (i = 0; i < nr_elements; i++) {
+		for (i = 1; i < nProcesses; i++) {
 
-			MPI_Send(&chunkSize, 1, MPI_INT, neigh[i], 0, MPI_COMM_WORLD);
+			MPI_Send(&chunkSize, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
 		}
 
 		chunkSize = (len - (nProcesses - 1) * chunkSize);
@@ -453,77 +429,93 @@ int main(int argc, char** argv) {
 	}
 	//other ranks
 	else {
-		readTopology("topology.in", neigh, rank, &nr_elements);
+        len = getSize(in);
 
-		MPI_Recv(&chunkSize, 1, MPI_INT, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
-		parent = status.MPI_SOURCE;
-
-		for (i = 0; i < nr_elements; i++) {
-
-			if (neigh[i] == parent) {
-				continue;
-			}
-
-			MPI_Send(&chunkSize, 1, MPI_INT, neigh[i], 0, MPI_COMM_WORLD);
-		}	
+		MPI_Recv(&chunkSize, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+	
 	}
 
 	//all ranks
-
-	text = (char*)malloc(chunkSize);
-	char* ofile = malloc(30 * sizeof(char));
-
-	readData("text.in", rank, chunkSize, text);
-
     local_frequency = (int *)
         calloc(2 * num_alphabets, sizeof(int));
 
-	sprintf(ofile, "output%d.dat", rank);
-
 	init();
 
-	encode(text, ofile, chunkSize);
-
-    chunkSize = getSize(ofile);
+    determine_frequency(in, rank, nProcesses);
 
     if (rank == 0) {
-        for (i = 0; i < nr_elements; i++) {
-            MPI_Recv(local_frequency, num_alphabets, MPI_INT, neigh[i], 0, MPI_COMM_WORLD, &status);
-            //printf("[RANK %d]Received from %d\n", rank, neigh[i]);
+        for (i = 1; i < nProcesses; i++) {
+            MPI_Recv(local_frequency, num_alphabets, MPI_INT, i, 0, MPI_COMM_WORLD, &status);
             for(j = 0; j < num_alphabets; j++) {
-                frequency[j]+=local_frequency[j];
+                if (local_frequency[j] > 0)
+                    frequency[j]+=local_frequency[j];
             }   
             
         }
 
-        for (i = 0; i < num_alphabets; i++) {
-            if (frequency[i] > 0)
-                printf("[%c]%d\n",i,frequency[i]);
+        for (i = 1; i < nProcesses; i++) {
+            MPI_Send(frequency, num_alphabets, MPI_INT, i, 0, MPI_COMM_WORLD);
+            MPI_Send(&original_size, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
         }
         
     }
 
     else {
-        //leaf
-        if (nr_elements == 1) {
-            MPI_Send(frequency, num_alphabets, MPI_INT, parent, 0, MPI_COMM_WORLD);
-            //printf("[RANK %d]Sent to %d\n", rank, parent);
-        }
-        else {
-            //first we receive
-            for (i = 0; i < nr_elements; i++) {
-                if (neigh[i] != parent) {
-                    MPI_Recv(local_frequency, num_alphabets, MPI_INT, neigh[i], 0, MPI_COMM_WORLD, &status); 
-        //            printf("[RANK %d]Received from %d\n", rank, neigh[i]);
-                    for(j = 0; j < num_alphabets; j++) {
-                       frequency[j]+=local_frequency[j];
-                    } 
-                }
-            }
-            MPI_Send(frequency, num_alphabets, MPI_INT, parent, 0, MPI_COMM_WORLD);
-            //printf("[RANK %d]Sent to %d\n", rank, parent);
-        }
+        MPI_Send(frequency, num_alphabets, MPI_INT, 0, 0, MPI_COMM_WORLD);
+
+        MPI_Recv(frequency, num_alphabets, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
+        MPI_Recv(&original_size, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);
     }
+
+    //all ranks
+    size_text_all = calloc(nProcesses, sizeof(int));
+
+    for (i = 0; i < num_alphabets; i++)
+        if (frequency[i] > 0)
+            ++num_active;
+
+
+    FILE *fout;
+    if ((fout = fopen(out, "wb")) == NULL) {
+        
+    }
+
+    allocate_tree();
+
+    if (rank == 0) {
+        add_leaves();
+        write_header(fout);
+        build_tree();
+    }
+
+    start_write = getSize(out);
+
+    MPI_Bcast(&num_nodes, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(leaf_index, num_alphabets, MPI_INT, 0, MPI_COMM_WORLD);
+    MPI_Bcast(parent_index, num_active, MPI_INT, 0, MPI_COMM_WORLD);
+
+    encode_character();
+
+    if (rank != 0) {
+        MPI_Send(&size_text, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+
+        MPI_Recv(size_text_all, nProcesses, MPI_INT, 0, 0, MPI_COMM_WORLD, &status);        
+
+    }
+
+    else {
+        size_text_all[rank] = size_text;
+        for (i = 1; i < nProcesses; i++) {
+            MPI_Recv(&size_text_all[i], 1, MPI_INT, i, 0, MPI_COMM_WORLD, &status);
+        }
+
+        for (i = 1; i < nProcesses; i++) {
+            MPI_Send(size_text_all, nProcesses, MPI_INT, i, 0, MPI_COMM_WORLD);
+        }
+
+    }
+
+    encode(fout, rank, in, nProcesses);    
 
 	MPI_Finalize();
 }
